@@ -17,6 +17,7 @@ const emptyFolder = async (pathFolder) => {
     if (file.isFile()) {
       await fs.unlink(fullPath);
     } else if (file.isDirectory()) {
+      await emptyFolder(fullPath);
       await fs.rmdir(fullPath);
     }
   });
@@ -32,23 +33,34 @@ const copyFileToAnotherFolder = async (
   await fs.copyFile(fullPathOriginal, fullPathCopy);
 };
 
-const copyDir = async (pathFolder) => {
-  const pathCopyFolder = `${pathFolder}-copy`;
-  await createFolder(pathCopyFolder);
-  await emptyFolder(pathCopyFolder);
-
-  const filesInOriginalFolder = await fs.readdir(pathFolder, {
+const copyFilesToFolder = async (pathFolderSrc, pathFolderDest) => {
+  const filesInSrcFolder = await fs.readdir(pathFolderSrc, {
     withFileTypes: true,
   });
-  filesInOriginalFolder.forEach(async (fileToCopy) => {
+  filesInSrcFolder.forEach(async (fileToCopy) => {
     if (fileToCopy.isFile()) {
       await copyFileToAnotherFolder(
-        pathFolder,
-        pathCopyFolder,
+        pathFolderSrc,
+        pathFolderDest,
         fileToCopy.name,
       );
+    } else if (fileToCopy.isDirectory()) {
+      const pathSubfolderSrc = path.join(pathFolderSrc, fileToCopy.name);
+      const pathSubfolderDest = path.join(pathFolderDest, fileToCopy.name);
+      await copyFolderWithFiles(pathSubfolderSrc, pathSubfolderDest);
     }
   });
+};
+
+const copyFolderWithFiles = async (pathFolderSrc, pathFolderDest) => {
+  await createFolder(pathFolderDest);
+  await emptyFolder(pathFolderDest);
+  await copyFilesToFolder(pathFolderSrc, pathFolderDest);
+};
+
+const copyDir = async (pathFolder) => {
+  const pathCopyFolder = `${pathFolder}-copy`;
+  await copyFolderWithFiles(pathFolder, pathCopyFolder);
 };
 
 copyDir(folderToCopyPath);
