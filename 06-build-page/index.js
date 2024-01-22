@@ -1,6 +1,7 @@
 const { createReadStream } = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { EOL } = require('node:os');
 
 const createFolder = async (folderPath) => {
   await fs.mkdir(folderPath, { recursive: true });
@@ -93,72 +94,204 @@ const createEmptyHtmlFile = async (fullFilePath) => {
   await fs.writeFile(fullFilePath, '');
 };
 
-const readTemplateHtml = async (templateFilePath) => {
+const readTemplateHtmlByLines = async (templateFilePath) => {
   try {
-    const templateData = await fs.readFile(templateFilePath, {
-      encoding: 'utf8',
-    });
-    return templateData;
+    const htmlTemplateLinesArray = [];
+    const templateFile = await fs.open(templateFilePath);
+    for await (const fileLine of templateFile.readLines({ encoding: 'utf8' })) {
+      htmlTemplateLinesArray.push(fileLine);
+    }
+    return htmlTemplateLinesArray;
   } catch (err) {
-    console.log(err);
+    console.log(err.message);
   }
 };
 
-const findTemplateTags = (templateData) => {
-  const openTag = '{{';
-  const closeTag = '}}';
-  const templateDataArray = [];
-  let nextTemplatePart = templateData;
-  let indexOpenTag = nextTemplatePart.indexOf(openTag);
-  while (indexOpenTag !== -1) {
-    let currTemplatePart = nextTemplatePart.substring(0, indexOpenTag);
-    templateDataArray.push({ data: currTemplatePart, isTag: false });
-    nextTemplatePart = nextTemplatePart.substring(
-      indexOpenTag + openTag.length,
-    );
-    let indexCloseTag = nextTemplatePart.indexOf(closeTag);
-    let currTagName = nextTemplatePart.substring(0, indexCloseTag);
-    templateDataArray.push({ data: currTagName, isTag: true });
-    nextTemplatePart = nextTemplatePart.substring(
-      indexCloseTag + closeTag.length,
-    );
-    indexOpenTag = nextTemplatePart.indexOf(openTag);
-  }
-  templateDataArray.push({ data: nextTemplatePart, isTag: false });
-  return templateDataArray;
-};
-
-const getHtmlComponentData = async (
+const getHtmlComponentByLines = async (
   tagName,
   componentFolderPath,
   componentExtension,
 ) => {
   const componentFileName = `${tagName}${componentExtension}`;
   const componentFilePath = path.join(componentFolderPath, componentFileName);
-  const fileData = await fs.readFile(componentFilePath, {
-    encoding: 'utf8',
-  });
-  return fileData;
+  const htmlCompLinesArray = [];
+  try {
+    const componentFile = await fs.open(componentFilePath);
+    for await (const fileLine of componentFile.readLines({
+      encoding: 'utf8',
+    })) {
+      htmlCompLinesArray.push(fileLine);
+    }
+    return htmlCompLinesArray;
+  } catch (err) {
+    console.log(err.message);
+  }
 };
 
-const replaceTemplateTags = async (
-  templateDataArray,
-  htmlFilePath,
+const hasTagInLine = (line, tag) => {
+  return line.includes(tag);
+};
+
+const getTagPosition = (line, tag) => {
+  return line.indexOf(tag);
+};
+
+const parseHtmlTemplateLine = (
+  line,
+  openCompTag,
+  closeCompTag,
+  indentNumSpaces,
+) => {
+  const hasOpenTag = hasTagInLine(line, openCompTag);
+  const hasCloseTag = hasTagInLine(line, closeCompTag);
+  const dataToAppend = {
+    dataBefore: '',
+    tag: '',
+    dataAfter: '',
+    tagPos: 0,
+    isTagClosed: false,
+    isAddEOL: false,
+  };
+  if (hasOpenTag && hasCloseTag) {
+    const openTagPos = getTagPosition(line, openCompTag);
+    const closeTagPos = getTagPosition(line, closeCompTag);
+    const beforeTagPart = line.substring(0, openTagPos);
+    const tagPart = line.substring(
+      openTagPos + openCompTag.length,
+      closeTagPos,
+    );
+    const afterTagPart = line.substring(closeTagPos + closeCompTag.length);
+    dataToAppend.tag = tagPart;
+    dataToAppend.dataAfter = afterTagPart;
+    dataToAppend.tagPos = line.length - line.trimStart().length;
+    dataToAppend.isAddEOL = openTagPos === dataToAppend.tagPos ? false : true;
+    dataToAppend.tagPos =
+      openTagPos === dataToAppend.tagPos
+        ? openTagPos
+        : dataToAppend.tagPos + indentNumSpaces;
+    dataToAppend.dataBefore = dataToAppend.isAddEOL ? beforeTagPart : '';
+    dataToAppend.isTagClosed = true;
+  } else if (hasOpenTag) {
+    const openTagPos = getTagPosition(line, openCompTag);
+    const beforeTagPart = line.substring(0, openTagPos);
+    const tagPart = line.substring(openTagPos + openCompTag.length);
+    dataToAppend.tag = tagPart;
+    dataToAppend.tagPos = line.length - line.trimStart().length;
+    dataToAppend.isAddEOL = openTagPos === dataToAppend.tagPos ? false : true;
+    dataToAppend.tagPos =
+      openTagPos === dataToAppend.tagPos
+        ? openTagPos
+        : dataToAppend.tagPos + indentNumSpaces;
+    dataToAppend.dataBefore = dataToAppend.isAddEOL ? beforeTagPart : '';
+  } else if (hasCloseTag) {
+    const closeTagPos = getTagPosition(line, closeCompTag);
+    const tagPart = line.substring(0, closeTagPos);
+    const afterTagPart = line.sunbstring(closeTagPos + closeCompTag.length);
+    dataToAppend.tag = tagPart;
+    dataToAppend.dataAfter = afterTagPart;
+    dataToAppend.isTagClosed = true;
+  } else {
+    dataToAppend.dataBefore = line;
+  }
+  return dataToAppend;
+};
+
+const addSpaceIndent = (numberOfSpaces) => {
+  const whiteSpace = ' ';
+  return whiteSpace.repeat(numberOfSpaces);
+};
+
+const replaceTagsByContent = async (
+  templateFilePath,
   componentFolderPath,
   componentExtension,
+  openCompTag,
+  closeCompTag,
+  indentNumSpaces,
 ) => {
-  for (const dataPart of templateDataArray) {
-    if (dataPart.isTag) {
-      const tagName = dataPart.data;
-      const componentData = await getHtmlComponentData(
-        tagName,
-        componentFolderPath,
-        componentExtension,
+  const htmlTemplateLines = await readTemplateHtmlByLines(templateFilePath);
+  let htmlFileData = '';
+  for (const templLine of htmlTemplateLines) {
+    let isNextLine = false;
+    let currText = templLine;
+    let currTagName = '';
+    let currTagPos = 0;
+    let isCurrTagClosed = true;
+    while (!isNextLine) {
+      let dataToAppend = parseHtmlTemplateLine(
+        currText,
+        openCompTag,
+        closeCompTag,
+        indentNumSpaces,
       );
-      await fs.appendFile(htmlFilePath, componentData);
-    } else {
-      await fs.appendFile(htmlFilePath, dataPart.data);
+      if (dataToAppend.tag === '') {
+        if (isCurrTagClosed) {
+          currTagPos =
+            currTagPos === 0 ? currTagPos : currTagPos - indentNumSpaces;
+          htmlFileData +=
+            addSpaceIndent(currTagPos) + dataToAppend.dataBefore + EOL;
+          currTagPos = 0;
+        } else {
+          currTagName += dataToAppend.dataBefore;
+        }
+        isNextLine = true;
+      } else if (!dataToAppend.isTagClosed) {
+        htmlFileData += dataToAppend.dataBefore;
+        currTagName += dataToAppend.tag;
+        currTagPos = dataToAppend.tagPos;
+        isNextLine = true;
+      } else {
+        htmlFileData += dataToAppend.dataBefore;
+        currTagName += dataToAppend.tag;
+        currTagPos = currTagPos === 0 ? dataToAppend.tagPos : currTagPos;
+        currTagName = currTagName.trim();
+        const componentLines = await getHtmlComponentByLines(
+          currTagName,
+          componentFolderPath,
+          componentExtension,
+        );
+        if (dataToAppend.isAddEOL) {
+          htmlFileData += EOL;
+        }
+        if (typeof componentLines !== 'undefined') {
+          for (const compnLine of componentLines) {
+            htmlFileData += addSpaceIndent(currTagPos) + compnLine + EOL;
+          }
+        }
+        currTagName = '';
+        currText = dataToAppend.dataAfter;
+        // to remove EOL for tags, that were on a separate line
+        if (currText === '') {
+          htmlFileData = htmlFileData.trimEnd();
+        }
+        isNextLine = false;
+      }
     }
+  }
+  return htmlFileData;
+};
+
+const writeDataToHtmlFile = async (
+  templateFilePath,
+  distHtmlFilePath,
+  componentFolderPath,
+  componentExtension,
+  openCompTag,
+  closeCompTag,
+  indentNumSpaces,
+) => {
+  try {
+    const htmlFileData = await replaceTagsByContent(
+      templateFilePath,
+      componentFolderPath,
+      componentExtension,
+      openCompTag,
+      closeCompTag,
+      indentNumSpaces,
+    );
+    await fs.appendFile(distHtmlFilePath, htmlFileData);
+  } catch (err) {
+    console.log(err.message);
   }
 };
 
@@ -175,6 +308,9 @@ const buildPage = async (
     distHtmlFileName = 'index.html',
     componentExtension = '.html',
     componentFolderName = 'components',
+    openCompTag = '{{',
+    closeCompTag = '}}',
+    indentNumSpaces = 2,
   } = {},
 ) => {
   const srcAssetFolderPath = path.join(srcFolder, srcAssetFolderName);
@@ -189,13 +325,14 @@ const buildPage = async (
   await createBundle(srcStyleFolderPath, distStyleFilePath, { styleExtension });
 
   await createEmptyHtmlFile(distHtmlFilePath);
-  const templateData = await readTemplateHtml(templateHtmlFilePath);
-  const templateDataArray = findTemplateTags(templateData);
-  await replaceTemplateTags(
-    templateDataArray,
+  await writeDataToHtmlFile(
+    templateHtmlFilePath,
     distHtmlFilePath,
     componentFolderPath,
     componentExtension,
+    openCompTag,
+    closeCompTag,
+    indentNumSpaces,
   );
 };
 
