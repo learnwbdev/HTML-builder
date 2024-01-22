@@ -12,7 +12,7 @@ const emptyFolder = async (pathFolder) => {
   const oldFilesInCopyFolder = await fs.readdir(pathFolder, {
     withFileTypes: true,
   });
-  oldFilesInCopyFolder.forEach(async (file) => {
+  for (const file of oldFilesInCopyFolder) {
     const fullPath = path.join(pathFolder, file.name);
     if (file.isFile()) {
       await fs.unlink(fullPath);
@@ -20,7 +20,7 @@ const emptyFolder = async (pathFolder) => {
       await emptyFolder(fullPath);
       await fs.rmdir(fullPath);
     }
-  });
+  }
 };
 
 const copyFileToAnotherFolder = async (
@@ -37,7 +37,7 @@ const copyFilesToFolder = async (pathFolderSrc, pathFolderDest) => {
   const filesInSrcFolder = await fs.readdir(pathFolderSrc, {
     withFileTypes: true,
   });
-  filesInSrcFolder.forEach(async (fileToCopy) => {
+  for (const fileToCopy of filesInSrcFolder) {
     if (fileToCopy.isFile()) {
       await copyFileToAnotherFolder(
         pathFolderSrc,
@@ -49,7 +49,7 @@ const copyFilesToFolder = async (pathFolderSrc, pathFolderDest) => {
       const pathSubfolderDest = path.join(pathFolderDest, fileToCopy.name);
       await copyFolderWithFiles(pathSubfolderSrc, pathSubfolderDest);
     }
-  });
+  }
 };
 
 const copyFolderWithFiles = async (pathFolderSrc, pathFolderDest) => {
